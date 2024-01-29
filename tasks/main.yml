@@ -1,0 +1,3 @@
+---
+- name: Run Firefox STIG tasks
+  ansible.builtin.import_tasks: tasks.yml
