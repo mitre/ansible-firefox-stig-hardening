@@ -1,0 +1,261 @@
+---
+# TODO: Add install of DOD Root Certs 
+# TODO: Add a default AnswerFile for EvaluateSTIG for Firefox Lockdown
+# TODO: add a var to allow for tls1.2 or tls1.3
+
+- name: STIG Firefox Install
+  hosts: all
+  become: true
+  tasks:
+    # TODO: Add this as a var 'pull_lastest_version: true'
+    # Dynamic if your distro keeps up
+    # - name: Get latest Firefox version
+    #   ansible.builtin.uri:
+    #     url: https://product-details.mozilla.org/1.0/firefox_versions.json
+    #     return_content: true
+    #   register: firefox_versions_json
+    # TODO: Add this as var 'default_version: 113.0'
+    # - name: Set Firefox version
+    #   ansible.builtin.set_fact:
+    #     firefox_version: "{{ firefox_versions_json.json.LATEST_FIREFOX_VERSION | default('122.0') }}"
+
+    # TODO: make this a con
+    # # Manual approach if you are on an older disto or need to pin
+    # - name: Set Firefox version
+    #   ansible.builtin.set_fact:
+    #     firefox_version: "113.0"
+
+    # V-251545
+    # - name: Install Firefox (Debian)
+    #   ansible.builtin.apt:
+    #     name: "firefox={{ firefox_version }}"
+    #     state: present
+    #   when: ansible_os_family == "Debian"
+    #   become: true
+
+    # - name: Install Firefox (RedHat)
+    #   ansible.builtin.yum:
+    #     name: "firefox-{{ firefox_version }}"
+    #     state: present
+    #   when: ansible_os_family == "RedHat"
+    #   become: true
+
+    # V-251545
+    # The above is better form but will work out the details later. <<: PRs Welcome :>>
+    - name: Install Firefox (Debian)
+      ansible.builtin.apt:
+        name: firefox
+        state: latest
+      when: ansible_os_family == "Debian"
+      become: true
+      tags:
+      - install
+
+
+    - name: Install Firefox (RedHat)
+      ansible.builtin.yum:
+        name: firefox
+        state: latest
+      when: ansible_os_family == "RedHat"
+      become: true
+      tags:
+        - install
+
+    - name: Get the path of the Firefox install
+      ansible.builtin.shell: readlink -f $(which firefox)
+      register: firefox_path
+      failed_when: firefox_path.rc != 0
+      changed_when: false
+      tags:
+        - config
+        - policies_json
+
+    - name: Set config directory
+      ansible.builtin.set_fact:
+        config_dir: "{{ firefox_path.stdout | dirname }}"
+      when: ansible_os_family == "RedHat" or ansible_os_family == "Debian"
+      tags:
+        - config
+        - policies_json
+
+    - name: Print config directory
+      ansible.builtin.debug:
+        msg: "The config directory is {{ config_dir }}"
+      tags:
+        - config
+        - policies_json
+
+    - name: Set config directory for MacOS
+      ansible.builtin.set_fact:
+        config_dir: "/Applications/Firefox.app/Contents/Resources"
+      when: ansible_os_family == "Darwin"
+      tags:
+        - config
+        - policies_json
+
+    - name: Create local-settings.js
+      ansible.builtin.copy:
+        dest: "{{ config_dir }}/defaults/pref/local-settings.js"
+        content: |
+          pref("general.config.obscure_value", 0);
+          pref("general.config.filename", "mozilla.cfg");
+        mode: "0644"
+        force: false
+      tags:
+        - local-setting.js
+
+    - name: Modify all-redhat.js
+      ansible.builtin.replace:
+        path: "{{ config_dir }}/defaults/preferences/all-redhat.js"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - {regexp: 'www.redhat.com', replace: 'about:blank'}
+        - {regexp: 'file:///usr/share/doc/HTML/index.html', replace: 'about:blank'}
+      when: ansible_os_family == "RedHat" and (config_dir + "/defaults/preferences/all-redhat.js" is file)
+
+    - name: Configure mozilla.cfg
+      ansible.builtin.lineinfile:
+        path: "{{ config_dir }}/mozilla.cfg"
+        regexp: '^lockPref\("{{ item.key }}",'
+        line: 'lockPref("{{ item.key }}", {{ item.value }});'
+        create: true
+        mode: "0644"
+      tags:
+        - mozilla_cnf
+      loop:
+        - { key: 'browser.urlbar.placeholderName', value: '"unexpected results"' }
+        - { key: 'browser.newtabpage.enabled', value: false }
+        - { key: 'browser.newtabpage.activity-stream.default.sites', value: '""' }
+        - { key: 'browser.newtabpage.activity-stream.discoverystream.enabled', value: false }
+        - { key: 'browser.newtabpage.activity-stream.showSearch', value: false }
+        - { key: 'browser.newtabpage.activity-stream.showSponsoredTopSites', value: false }
+        - { key: 'browser.search.suggest.enabled', value: false }
+        - { key: 'browser.urlbar.showSearchSuggestionsFirst', value: false }
+        - { key: 'browser.urlbar.suggest.searches', value: false }
+        - { key: 'network.protocol-handler.external.shell', value: false }
+        - { key: 'privacy.sanitize.sanitizeOnShutdown', value: false }
+        - { key: 'privacy.sanitize.promptOnSanitize', value: false }
+        - { key: 'extensions.update.enabled', value: false }
+        - { key: 'browser.formfill.enable', value: false }
+        - { key: 'devtools.policy.disabled', value: true }
+        - { key: 'toolkit.telemetry.enabled', value: false }
+        - { key: 'toolkit.telemetry.archive.enabled', value: false }
+        - { key: 'privacy.trackingprotection.fingerprinting.enabled', value: true }
+        - { key: 'privacy.trackingprotection.cryptomining.enabled', value: true }
+        - { key: 'browser.contentblocking.category', value: '"strict"' }
+        - { key: 'extensions.htmlaboutaddons.recommendations.enabled', value: false }
+        - { key: 'signon.prefillForms', value: false }
+        - { key: 'signon.autofillForms', value: false }
+        - { key: 'app.update.enabled', value: false }
+        - { key: 'signon.rememberSignons', value: false }
+        - { key: 'browser.search.update', value: false }
+        - { key: 'datareporting.policy.dataSubmissionEnabled', value: false }
+        - { key: 'xpinstall.enabled', value: false }
+        - { key: 'security.enable_ssl2', value: false }
+        - { key: 'security.enable.ssl2', value: false }
+        - { key: 'security.tls.version.min', value: 2 } # V-251546
+        - { key: 'security.tls.version.max', value: 4 } 
+        - { key: 'security.default_personal_cert', value: '"Ask Every Time"' }
+        - { key: 'security.ssl3.rsa_des_ede3_sha', value: false }
+        - { key: 'security.enable.ssl3', value: false }
+        - { key: 'browser.startup.homepage', value: '"about:blank"' }
+        - { key: 'dom.disable_window_open_feature.status', value: true }
+        - { key: 'dom.disable_window_move_resize', value: true }
+        - { key: 'dom.event.contextmenu.enabled', value: false }
+        - { key: 'dom.disable_window_flip', value: true }
+        - { key: 'security.warn_leaving_secure', value: true }
+        - { key: 'extension.pocket.enabled', value: false }
+        - { key: 'browser.helperApps.alwaysAsk.force', value: true }
+        - { key: 'privacy.item.history', value: false }
+        - { key: 'plugin.disable_full_page_plugin_for_types', value: '"application/pdf,application/fdf,application/xfdf,application/lso,application/lss,application/iqy,application/rqy,application/lsl,application/xlk,application/xls,application/xlt,application/pot,application/pps,application/ppt,application/dos,application/dot,application/wks,application/bat,application/ps,application/eps,application/wch,application/wcm,application/wb1,application/wb3,application/rtf,application/doc,application/mdb,application/mde,application/wbk,application/ad,application/adp"' }
+
+    - name: Set preferences
+      ansible.builtin.set_fact:
+        preferences:
+          security.default_personal_cert: { Value: "Ask Every Time", Status: "locked" } # V-251547
+          browser.search.update: { Value: false, Status: "locked" } # V-251548
+          dom.disable_window_move_resize: { Value: true, Status: "locked" }
+          dom.disable_window_flip: { Value: true, Status: "locked" }
+          browser.contentblocking.category: { Value: "strict", Status: "locked" }
+          extensions.htmlaboutaddons.recommendations.enabled: { Value: false, Status: "locked" }
+      tags:
+        - policies_json
+
+    - name: Set policies.json content
+      ansible.builtin.set_fact:
+        policies_content:
+          policies:
+            DisableFirefoxAccounts: true
+            DisabledCiphers: { TLS_RSA_WITH_3DES_EDE_CBC_SHA: true } # V-251571
+            UserMessaging: { ExtensionRecommendations: false } # V-251572
+            DisablePocket: true
+            DisableAppUpdate: true
+            DontCheckDefaultBrowser: true
+            OfferToSaveLogins: false
+            SSLVersionMin: "tls1.2" # V-251546
+            ExtensionUpdate: false # V-251549
+            DisableFormHistory: true
+            PasswordManagerEnabled: false
+            PopupBlocking: { Default: true, Locked: true }
+            InstallAddonsPermission: { Default: false }
+            DisableTelemetry: true
+            DisableDeveloperTools: true
+            DisableForgetButton: true
+            DisablePrivateBrowsing: true
+            SearchSuggestEnabled: false
+            NetworkPrediction: false
+            Permissions: { Autoplay: { Default: "block-audio-video" }}
+            EnableTrackingProtection: { Fingerprinting: true, Cryptomining: true }
+            SanitizeOnShutdown: {
+              Cache: false,
+              Cookies: false,
+              Downloads: false,
+              FormData: false,
+              History: false,
+              Sessions: false,
+              SiteSettings: false,
+              OfflineApps: false,
+              Locked: true
+            }
+            FirefoxHome: { # V-251573
+              Search: false,
+              TopSites: false,
+              SponsoredTopSites: false,
+              Pocket: false,
+              SponsoredPocket: false,
+              Highlights: false,
+              Snippets: false,
+              locked: true
+            }
+            DNSOverHTTPS: { Enabled: false } # V-251577
+            DisableFeedbackCommands: true # V-251580
+            EncryptedMediaExtensions: { # V-251580
+              Enabled: false,
+              Locked: true
+            }
+            DisableFirefoxStudies: true # V-252909
+            Preferences: {}
+      tags:
+        - policies_json
+
+    - name: Add preferences to policies.json content
+      ansible.builtin.set_fact:
+        policies_content: "{{ policies_content | combine({'policies': {'Preferences': {item.key: item.value}}}, recursive=True) }}"
+      tags:
+        - policies_json
+      loop: "{{ preferences | dict2items }}"
+
+
+    - name: Create policies.json
+      ansible.builtin.copy:
+        dest: "{{ config_dir }}/distribution/policies.json"
+        content: "{{ policies_content | to_nice_json }}"
+        mode: "0644"
+        force: true
+      tags:
+        - policies_json
+
+    - name: Print completion message
+      ansible.builtin.debug:
+        msg: "Secure Firefox completed."

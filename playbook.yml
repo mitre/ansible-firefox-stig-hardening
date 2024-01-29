@@ -1,0 +1,6 @@
+---
+# Sample playbook to run this role against all available hosts.
+- hosts: all
+  gather_facts: no
+  roles:
+    - role: "{{ playbook_dir }}"
